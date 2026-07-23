@@ -1,0 +1,1278 @@
+import { useState, useEffect, useCallback, useMemo } from "react";
+import {
+  Factory, Users, Gauge, Copy, RotateCcw, Plus, Trash2, Check, ChevronRight, ClipboardList, Settings, Download, ListChecks,
+} from "lucide-react";
+
+// ---------- constants ----------
+const NCPLH_GOAL_DEFAULT = 8500;
+const SHIFTS = ["1st", "2nd", "3rd"];
+const SHIFT_HOURS_DEFAULT = 8;
+const FIXED_ROLES = ["Padlocker", "Material Handler", "Corrugated", "Leads", "Sorting/Repack"];
+
+// Starter values — nothing loads automatically. Load once from Setup, then edit/clear freely.
+const STARTER_FINISHING_MACHINES = [
+  { machine: "7405", defaultProduct: "HM" },
+  { machine: "7410", defaultProduct: "HM" },
+  { machine: "7415", defaultProduct: "20pc" },
+  { machine: "7420", defaultProduct: "TBBB" },
+  { machine: "7439", defaultProduct: "10pc Monopoly" },
+  { machine: "7440", defaultProduct: "TBBB" },
+  { machine: "7441", defaultProduct: "Bojangles" },
+  { machine: "7446", defaultProduct: "6ct" },
+  { machine: "7450", defaultProduct: "13ct" },
+];
+const STARTER_FINISHING_PRODUCTS = [
+  { product: "HM", speedGoal: "42000" },
+  { product: "20pc", speedGoal: "22000" },
+  { product: "TBBB", speedGoal: "18000" },
+  { product: "10pc Monopoly", speedGoal: "18000" },
+  { product: "Bojangles", speedGoal: "21000" },
+  { product: "6ct", speedGoal: "14000" },
+  { product: "13ct", speedGoal: "7200" },
+];
+
+// Forming map — Work Center #, lanes, and default product, from the plant's Shift Targets sheet.
+const STARTER_FORMING_MACHINES = [
+  { machine: "8506", lanes: "2", defaultProduct: "10pc" },
+  { machine: "8526", lanes: "6", defaultProduct: "Holster" },
+  { machine: "8529", lanes: "4", defaultProduct: "4pc" },
+  { machine: "8551", lanes: "2", defaultProduct: "10pc" },
+  { machine: "8552", lanes: "2", defaultProduct: "6pc" },
+  { machine: "8553", lanes: "2", defaultProduct: "4pc" },
+  { machine: "8554", lanes: "2", defaultProduct: "4pc" },
+  { machine: "8555", lanes: "4", defaultProduct: "Medium" },
+  { machine: "8556", lanes: "2", defaultProduct: "10pc" },
+  { machine: "8557", lanes: "2", defaultProduct: "4pc" },
+  { machine: "8558", lanes: "2", defaultProduct: "10pc" },
+  { machine: "8559", lanes: "2", defaultProduct: "6pc" },
+  { machine: "8560", lanes: "2", defaultProduct: "Clamshell" },
+  { machine: "8561", lanes: "2", defaultProduct: "4pc" },
+  { machine: "8562", lanes: "2", defaultProduct: "10pc" },
+  { machine: "8563", lanes: "2", defaultProduct: "10pc" },
+  { machine: "8564", lanes: "4", defaultProduct: "Large" },
+  { machine: "8565", lanes: "2", defaultProduct: "4pc" },
+  { machine: "8566", lanes: "4", defaultProduct: "Small" },
+  { machine: "8568", lanes: "4", defaultProduct: "Medium" },
+  { machine: "8569", lanes: "6", defaultProduct: "Medium" },
+  { machine: "8570", lanes: "4", defaultProduct: "4pc" },
+  { machine: "8571", lanes: "4", defaultProduct: "4pc" },
+  { machine: "8574", lanes: "4", defaultProduct: "6pc" },
+  { machine: "8578", lanes: "6", defaultProduct: "Large" },
+  { machine: "8579", lanes: "4", defaultProduct: "6pc" },
+  { machine: "8583", lanes: "2", defaultProduct: "4pc" },
+  { machine: "8584", lanes: "2", defaultProduct: "Clamshell" },
+  { machine: "8585", lanes: "4", defaultProduct: "10pc" },
+  { machine: "8586", lanes: "6", defaultProduct: "Small" },
+  { machine: "8589", lanes: "2", defaultProduct: "6pc" },
+  { machine: "8590", lanes: "2", defaultProduct: "10pc" },
+  { machine: "8591", lanes: "2", defaultProduct: "Clamshell" },
+  { machine: "8593", lanes: "2", defaultProduct: "6pc" },
+];
+// Rate per lane (cartons/hr per lane) — Standard Speed = Rate per Lane × Lanes.
+// Verified against the 8-hour targets sheet (e.g. 10pc: 2300 x 2 lanes x 8hr = 36,800)
+// and against the Standard Work sheet's "2 Lanes = CPH Goal" table (4pc: 2100x2=4200, etc).
+const STARTER_FORMING_PRODUCTS = [
+  { product: "4pc", ratePerLane: "2100" },
+  { product: "6pc", ratePerLane: "2375" },
+  { product: "10pc", ratePerLane: "2300" },
+  { product: "Small", ratePerLane: "3250" },
+  { product: "Medium", ratePerLane: "2325" },
+  { product: "Large", ratePerLane: "1875" },
+  { product: "Holster", ratePerLane: "4825" },
+  { product: "Clamshell", ratePerLane: "2050" },
+];
+const STARTER_CATEGORIES = [
+  { label: "4pc", header: false },
+  { label: "6pc", header: false },
+  { label: "10pc", header: false },
+  { label: "10pc Monopoly", header: false },
+  { label: "Med", header: false },
+  { label: "Lg", header: true },
+  { label: "BK Nuggets Large", header: false },
+  { label: "BK Nuggets Small", header: false },
+  { label: "Sm", header: false },
+  { label: "TBCS", header: false },
+];
+// From the Supervisor Standard Work sheet — task checklist by section.
+const STARTER_CHECKLIST = [
+  { section: "Start of Shift", label: "Safety! Check PPE, new starts, last shift safety issues" },
+  { section: "Start of Shift", label: "Passdown meeting with previous shift supervisor" },
+  { section: "Start of Shift", label: "Verify priorities and production" },
+  { section: "During Shift", label: "Safety check: PPE, safety issues, improvements" },
+  { section: "During Shift", label: "Conduct quality audits (min 2x/shift/machine)" },
+  { section: "During Shift", label: "Verify run speed vs. target" },
+  { section: "During Shift", label: "Kick count / case weight verification" },
+  { section: "During Shift", label: "Upcoming jobs ready for production; plan/pre-work MR" },
+  { section: "During Shift", label: "Update production board to reflect actual floor" },
+  { section: "During Shift", label: "Employee needs addressed" },
+  { section: "End of Shift", label: "Padlock validation" },
+  { section: "End of Shift", label: "Text production #'s & 24hr # every 2 hours" },
+  { section: "End of Shift", label: "Excel report out" },
+  { section: "End of Shift", label: "Havi labor report" },
+  { section: "End of Shift", label: "Sign offs" },
+  { section: "End of Shift", label: "Email scheduled time to Gina" },
+  { section: "Daily Management", label: "Weekly safety walk (Wednesday)" },
+  { section: "Daily Management", label: "HME walk (Friday unless completed)" },
+  { section: "Daily Management", label: "Recorded safety contacts" },
+  { section: "Daily Management", label: "Conduct daily 5S & GMP audits" },
+  { section: "Daily Management", label: "Ensure all pallets have status" },
+  { section: "Daily Management", label: "Validate CTQ form" },
+];
+const CHECKLIST_SECTIONS = ["Start of Shift", "During Shift", "End of Shift", "Daily Management"];
+// Forming employee roster — names only, pulled from the most recent week's schedule sheet.
+// Hire dates, shift times, vacation/training status, and lane assignments were intentionally left out.
+const STARTER_EMPLOYEES = [
+  "Ajang Atem", "Alfreda Walton", "Amdeberhan Mangudawa", "Ameer James", "Angel Almodovar",
+  "Angela Arrington", "Angela Brown", "Anthony Hicks", "Asegedech Butako", "Athieng Anyoun",
+  "Awak Atem", "Betelehem Hunegnaw", "Chantelle Wilkerson", "Cornelius Walls", "Darryl Thorpe",
+  "David King", "Debebe Ayana", "Deisy Medrano", "Demetria Carter", "Deng Deng", "Dometa Brown",
+  "Ekram Musa", "Eliza Ortiz", "Guylaine Kagizi", "Jacienda Boone", "Jasmine Wade", "Jawed Azizi",
+  "Jebastian Battle", "Jeff Decloucet", "Joede Tchikpe Elise", "Johnny Johnson", "Justin Guyton",
+  "Justin Nentwich", "Kaleab Girma", "Katrina Avant", "Kenneth Truitt", "KhamKhai", "Khup Kap",
+  "Khup Tho Pau", "Kika Tana", "Kokebe Woldehana", "Kucha Becho", "Lavar Phillips", "Lucia Machu",
+  "Marion Ledlum", "Markaus Davis", "Marsha Campbell", "Mary Agum", "Mekedash Tegenge",
+  "Meron Bekele", "Mikele Longhi", "Mohammad Mohammad", "Narges Ebrihimi", "Nasruddin Azizi",
+  "Nicholas Essien", "Nyoat Gatduor", "Peter Lien", "Quentin Hemphill", "Ronnie Tate",
+  "Sadia Gebru", "Samantha Beauvoir", "Selamawit Longhi", "Semira Mohammed", "Shanise Morris",
+  "Sorino Almodovar", "Tarik Haj", "Terry Smith", "Thang Cin", "Thawng Sang",
+  "Toyub Mohamad Habibullah", "Troy Brown", "Virginia Florence", "Yodit Fitwi", "Zufan Kassaye",
+];
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const withId = (rows) => rows.map((r) => ({ ...r, id: crypto.randomUUID() }));
+
+const CONFIG_KEYS = {
+  finMachines: "config:finishing-machines",
+  finProducts: "config:finishing-products",
+  formMachines: "config:forming-machines",
+  formProducts: "config:forming-products",
+  categories: "config:forming-categories",
+  employees: "config:employees",
+  checklist: "config:checklist",
+  ncplhGoal: "config:ncplh-goal",
+  locked: "config:locked",
+};
+const storageKey = (date, dept) => `sapupdate:${date}:${dept}`;
+const laborKey = (date, shift) => `nuggetlabor:${date}:${shift}`;
+const formingEosKey = (date, shift) => `formingeos:${date}:${shift}`;
+const finishingEosKey = (date, shift) => `finishingeos:${date}:${shift}`;
+const standardWorkKey = (date, shift) => `standardwork:${date}:${shift}`;
+
+function kfmt(raw) {
+  const n = parseFloat(raw);
+  if (!Number.isFinite(n)) return "";
+  return `${Math.floor(n / 1000)}k`;
+}
+function speedStatus(goal, actual) {
+  const g = parseFloat(goal);
+  const a = parseFloat(actual);
+  if (!Number.isFinite(g) || !Number.isFinite(a)) return "pending";
+  const pct = a / g;
+  if (pct >= 0.97) return "good";
+  if (pct >= 0.85) return "watch";
+  return "short";
+}
+const STATUS_COLOR = { good: "#4FB477", watch: "#F2A93B", short: "#E2544B", pending: "#4A5058" };
+function Dot({ status }) {
+  return (
+    <span style={{
+      display: "inline-block", width: 8, height: 8, borderRadius: "50%",
+      background: STATUS_COLOR[status], flexShrink: 0,
+      boxShadow: status !== "pending" ? `0 0 6px ${STATUS_COLOR[status]}99` : "none",
+    }} />
+  );
+}
+function Select({ value, onChange, options, disabled, placeholder, style }) {
+  if (!options || options.length === 0) {
+    return <input disabled={disabled} value={value} onChange={(e) => onChange(e.target.value)} style={style || inputStyle} placeholder={placeholder} />;
+  }
+  return (
+    <select disabled={disabled} value={value} onChange={(e) => onChange(e.target.value)} style={style || inputStyle}>
+      <option value="">{placeholder || "— select —"}</option>
+      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      {value && !options.includes(value) && <option value={value}>{value} (custom)</option>}
+    </select>
+  );
+}
+
+export default function ShiftCompanion() {
+  // ---- config ----
+  const [finMachinesConfig, setFinMachinesConfig] = useState([]);
+  const [finProductsConfig, setFinProductsConfig] = useState([]);
+  const [formMachinesConfig, setFormMachinesConfig] = useState([]);
+  const [formProductsConfig, setFormProductsConfig] = useState([]);
+  const [categoriesConfig, setCategoriesConfig] = useState([]);
+  const [employeesConfig, setEmployeesConfig] = useState([]);
+  const [checklistConfig, setChecklistConfig] = useState([]);
+  const [ncplhGoal, setNcplhGoal] = useState(NCPLH_GOAL_DEFAULT);
+  const [configLocked, setConfigLocked] = useState(false);
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [configSaveState, setConfigSaveState] = useState("idle");
+
+  const [date, setDate] = useState(todayISO());
+  const [dept, setDept] = useState("Stone Mountain");
+  const [shift, setShift] = useState("2nd");
+  const [timeLabel, setTimeLabel] = useState("");
+  const [forming, setFormingState] = useState(null);
+  const [finishing, setFinishingState] = useState(null);
+  const [tab, setTab] = useState("setup");
+  const [loaded, setLoaded] = useState(false);
+  const [saveState, setSaveState] = useState("idle");
+  const [copied, setCopied] = useState(false);
+  const [copiedLabor, setCopiedLabor] = useState(false);
+  const [labor, setLabor] = useState({ cartons: "", hours: "" });
+
+  const [nuggetRows, setNuggetRows] = useState(null);
+  const [laborLoaded, setLaborLoaded] = useState(false);
+  const [laborSaveState, setLaborSaveState] = useState("idle");
+
+  const [formingEos, setFormingEos] = useState(null);
+  const [formingEosLoaded, setFormingEosLoaded] = useState(false);
+  const [formingEosSaveState, setFormingEosSaveState] = useState("idle");
+
+  const [finishingEos, setFinishingEos] = useState(null);
+  const [finishingEosLoaded, setFinishingEosLoaded] = useState(false);
+  const [finishingEosSaveState, setFinishingEosSaveState] = useState("idle");
+
+  const [standardWork, setStandardWork] = useState(null);
+  const [standardWorkLoaded, setStandardWorkLoaded] = useState(false);
+  const [standardWorkSaveState, setStandardWorkSaveState] = useState("idle");
+
+  const key = storageKey(date, dept);
+  const lkey = laborKey(date, shift);
+  const fekey = formingEosKey(date, shift);
+  const finekey = finishingEosKey(date, shift);
+  const swkey = standardWorkKey(date, shift);
+
+  const finProductNames = useMemo(() => finProductsConfig.map((p) => p.product).filter(Boolean), [finProductsConfig]);
+  const formProductNames = useMemo(() => formProductsConfig.map((p) => p.product).filter(Boolean), [formProductsConfig]);
+  const employeeNames = useMemo(() => employeesConfig.map((e) => e.name).filter(Boolean), [employeesConfig]);
+
+  const finSpeedGoalFor = useCallback((product) => {
+    const p = finProductsConfig.find((x) => x.product === product);
+    return p ? p.speedGoal : "";
+  }, [finProductsConfig]);
+  const formSpeedGoalFor = useCallback((product, lanes) => {
+    const p = formProductsConfig.find((x) => x.product === product);
+    const rate = parseFloat(p?.ratePerLane);
+    const l = parseFloat(lanes);
+    if (!Number.isFinite(rate) || !Number.isFinite(l)) return "";
+    return String(Math.round(rate * l));
+  }, [formProductsConfig]);
+
+  // ---- load config once ----
+  useEffect(() => {
+    (async () => {
+      try {
+        const [fm, fp, om, op, cat, emp, chk, g, l] = await Promise.all([
+          window.storage.get(CONFIG_KEYS.finMachines, false).catch(() => null),
+          window.storage.get(CONFIG_KEYS.finProducts, false).catch(() => null),
+          window.storage.get(CONFIG_KEYS.formMachines, false).catch(() => null),
+          window.storage.get(CONFIG_KEYS.formProducts, false).catch(() => null),
+          window.storage.get(CONFIG_KEYS.categories, false).catch(() => null),
+          window.storage.get(CONFIG_KEYS.employees, false).catch(() => null),
+          window.storage.get(CONFIG_KEYS.checklist, false).catch(() => null),
+          window.storage.get(CONFIG_KEYS.ncplhGoal, false).catch(() => null),
+          window.storage.get(CONFIG_KEYS.locked, false).catch(() => null),
+        ]);
+        setFinMachinesConfig(fm?.value ? JSON.parse(fm.value) : []);
+        setFinProductsConfig(fp?.value ? JSON.parse(fp.value) : []);
+        setFormMachinesConfig(om?.value ? JSON.parse(om.value) : []);
+        setFormProductsConfig(op?.value ? JSON.parse(op.value) : []);
+        setCategoriesConfig(cat?.value ? JSON.parse(cat.value) : []);
+        setEmployeesConfig(emp?.value ? JSON.parse(emp.value) : []);
+        setChecklistConfig(chk?.value ? JSON.parse(chk.value) : []);
+        setNcplhGoal(g?.value ? parseFloat(g.value) : NCPLH_GOAL_DEFAULT);
+        setConfigLocked(l?.value === "true");
+      } catch {
+        // leave empty — user configures from scratch
+      } finally {
+        setConfigLoaded(true);
+      }
+    })();
+  }, []);
+
+  const saveConfig = useCallback(async (k, value) => {
+    setConfigSaveState("saving");
+    try {
+      await window.storage.set(k, JSON.stringify(value), false);
+      setConfigSaveState("saved");
+    } catch { setConfigSaveState("idle"); }
+  }, []);
+
+  useEffect(() => { if (configLoaded) saveConfig(CONFIG_KEYS.finMachines, finMachinesConfig); }, [finMachinesConfig]); // eslint-disable-line
+  useEffect(() => { if (configLoaded) saveConfig(CONFIG_KEYS.finProducts, finProductsConfig); }, [finProductsConfig]); // eslint-disable-line
+  useEffect(() => { if (configLoaded) saveConfig(CONFIG_KEYS.formMachines, formMachinesConfig); }, [formMachinesConfig]); // eslint-disable-line
+  useEffect(() => { if (configLoaded) saveConfig(CONFIG_KEYS.formProducts, formProductsConfig); }, [formProductsConfig]); // eslint-disable-line
+  useEffect(() => { if (configLoaded) saveConfig(CONFIG_KEYS.categories, categoriesConfig); }, [categoriesConfig]); // eslint-disable-line
+  useEffect(() => { if (configLoaded) saveConfig(CONFIG_KEYS.employees, employeesConfig); }, [employeesConfig]); // eslint-disable-line
+  useEffect(() => { if (configLoaded) saveConfig(CONFIG_KEYS.checklist, checklistConfig); }, [checklistConfig]); // eslint-disable-line
+  useEffect(() => { if (configLoaded) saveConfig(CONFIG_KEYS.ncplhGoal, ncplhGoal); }, [ncplhGoal]); // eslint-disable-line
+  useEffect(() => { if (configLoaded) saveConfig(CONFIG_KEYS.locked, configLocked); }, [configLocked]); // eslint-disable-line
+
+  // ---- build fresh working sets from config ----
+  const buildFormingFromConfig = useCallback(() => ({
+    shiftProduction: "", ee: "", buggies: "", lanes: "",
+    categories: withId(categoriesConfig.map((c) => ({ label: c.label, header: !!c.header, qty: "" }))),
+    issues: "", absent: "",
+  }), [categoriesConfig]);
+
+  const buildFinishingFromConfig = useCallback(() => ({
+    shiftProduction: "", gluers: "",
+    machines: withId(finMachinesConfig.map((m) => ({
+      machine: m.machine, product: m.defaultProduct || "", speedGoal: finSpeedGoalFor(m.defaultProduct),
+      speedActual: "", confirmations: "", issues: "",
+    }))),
+    absent: "",
+  }), [finMachinesConfig, finSpeedGoalFor]);
+
+  const buildNuggetFromConfig = useCallback(() => withId(
+    formMachinesConfig.map((m) => ({ machine: m.machine, lanes: m.lanes, product: m.defaultProduct || "", employee: "", laborHours: "", speedActual: "" }))
+  ), [formMachinesConfig]);
+
+  const buildFormingEosFromConfig = useCallback(() => ({
+    lanesRunning: "", gpiEE: "", actualEE: "", shiftHours: String(SHIFT_HOURS_DEFAULT),
+    buggyAssociate: "", leadNames: "", movedEmployee: "", trainees: "",
+    categoryTotals: withId(categoriesConfig.map((c) => ({ label: c.label, header: !!c.header, qty: "" }))),
+    notes: "",
+  }), [categoriesConfig]);
+
+  const buildFinishingEosFromConfig = useCallback(() => ({
+    deptTotals: withId(finMachinesConfig.map((m) => ({ machine: m.machine, product: m.defaultProduct || "", total24hr: "" }))),
+    roster: withId([
+      ...finMachinesConfig.map((m) => ({ station: m.machine, isMachine: true, item: m.defaultProduct || "", manned: false, employees: "" })),
+      ...FIXED_ROLES.map((r) => ({ station: r, isMachine: false, item: "", manned: false, employees: "" })),
+    ]),
+    actualFullTime: "", cws: "", notes: "",
+  }), [finMachinesConfig]);
+
+  const buildStandardWorkFromConfig = useCallback(() => ({
+    lanes: "", gpiEE: "", cws: "", absentLate: "",
+    items: withId(checklistConfig.map((c) => ({ section: c.section, label: c.label, done: false }))),
+    notes: "",
+  }), [checklistConfig]);
+
+  // ---- load / save: 2hr update, per date ----
+  useEffect(() => {
+    if (!configLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await window.storage.get(key, false);
+        if (!cancelled && res?.value) {
+          const parsed = JSON.parse(res.value);
+          setTimeLabel(parsed.timeLabel || "");
+          setFormingState(parsed.forming || buildFormingFromConfig());
+          setFinishingState(parsed.finishing || buildFinishingFromConfig());
+          setLabor(parsed.labor || { cartons: "", hours: "" });
+        } else if (!cancelled) {
+          setTimeLabel("");
+          setFormingState(buildFormingFromConfig());
+          setFinishingState(buildFinishingFromConfig());
+          setLabor({ cartons: "", hours: "" });
+        }
+      } catch {
+        if (!cancelled) { setFormingState(buildFormingFromConfig()); setFinishingState(buildFinishingFromConfig()); }
+      } finally { if (!cancelled) setLoaded(true); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, dept, configLoaded]);
+
+  useEffect(() => {
+    if (!loaded || !forming || !finishing) return;
+    setSaveState("saving");
+    const t = setTimeout(async () => {
+      try { await window.storage.set(key, JSON.stringify({ timeLabel, forming, finishing, labor }), false); setSaveState("saved"); }
+      catch { setSaveState("idle"); }
+    }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeLabel, forming, finishing, labor, loaded]);
+
+  // ---- generic per date+shift load/save helper (used by nugget, forming eos, finishing eos, standard work) ----
+  function useShiftScoped(storageKeyStr, builder, deps) {
+    const [state, setState] = useState(null);
+    const [isLoaded, setIsLoaded] = useState(false);
+    const [saveSt, setSaveSt] = useState("idle");
+    useEffect(() => {
+      if (!configLoaded) return;
+      let cancelled = false;
+      (async () => {
+        try {
+          const res = await window.storage.get(storageKeyStr, false);
+          if (!cancelled && res?.value) setState(JSON.parse(res.value));
+          else if (!cancelled) setState(builder());
+        } catch { if (!cancelled) setState(builder()); }
+        finally { if (!cancelled) setIsLoaded(true); }
+      })();
+      return () => { cancelled = true; };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [storageKeyStr, configLoaded]);
+    useEffect(() => {
+      if (!isLoaded || !state) return;
+      setSaveSt("saving");
+      const t = setTimeout(async () => {
+        try { await window.storage.set(storageKeyStr, JSON.stringify(state), false); setSaveSt("saved"); }
+        catch { setSaveSt("idle"); }
+      }, 500);
+      return () => clearTimeout(t);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [state, isLoaded]);
+    return [state, setState, isLoaded, saveSt];
+  }
+
+  const [nRows, setNRows, nLoaded, nSave] = useShiftScoped(lkey, buildNuggetFromConfig);
+  const [feState, setFeState, feLoaded, feSave] = useShiftScoped(fekey, buildFormingEosFromConfig);
+  const [fieState, setFieState, fieLoaded, fieSave] = useShiftScoped(finekey, buildFinishingEosFromConfig);
+  const [swState, setSwState, swLoaded, swSave] = useShiftScoped(swkey, buildStandardWorkFromConfig);
+
+  // ---- setters: 2hr update ----
+  const patchForming = (patch) => setFormingState((s) => ({ ...s, ...patch }));
+  const patchFinishing = (patch) => setFinishingState((s) => ({ ...s, ...patch }));
+  const updateCategory = (id, patch) => patchForming({ categories: forming.categories.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
+  const updateFinMachine = (id, patch) => patchFinishing({ machines: finishing.machines.map((m) => (m.id === id ? { ...m, ...patch } : m)) });
+  const onFinProductChange = (id, product) => patchFinishing({ machines: finishing.machines.map((m) => (m.id === id ? { ...m, product, speedGoal: finSpeedGoalFor(product) || m.speedGoal } : m)) });
+  const addFinRow = () => patchFinishing({ machines: [...finishing.machines, { id: crypto.randomUUID(), machine: "", product: "", speedGoal: "", speedActual: "", confirmations: "", issues: "" }] });
+  const removeFinRow = (id) => patchFinishing({ machines: finishing.machines.filter((m) => m.id !== id) });
+  const resetUpdateToConfig = () => { setTimeLabel(""); setFormingState(buildFormingFromConfig()); setFinishingState(buildFinishingFromConfig()); };
+
+  // ---- setters: nugget labor ----
+  const updateNuggetRow = (id, patch) => setNRows((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const addNuggetRow = () => setNRows((rows) => [...rows, { id: crypto.randomUUID(), machine: "", lanes: "", product: "", employee: "", laborHours: "", speedActual: "" }]);
+  const removeNuggetRow = (id) => setNRows((rows) => rows.filter((r) => r.id !== id));
+  const resetNuggetToConfig = () => setNRows(buildNuggetFromConfig());
+
+  // ---- setters: forming eos ----
+  const patchFe = (patch) => setFeState((s) => ({ ...s, ...patch }));
+  const updateFeCategory = (id, patch) => patchFe({ categoryTotals: feState.categoryTotals.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
+  const resetFeToConfig = () => setFeState(buildFormingEosFromConfig());
+
+  // ---- setters: finishing eos ----
+  const patchFie = (patch) => setFieState((s) => ({ ...s, ...patch }));
+  const updateFieDeptTotal = (id, patch) => patchFie({ deptTotals: fieState.deptTotals.map((d) => (d.id === id ? { ...d, ...patch } : d)) });
+  const updateFieRoster = (id, patch) => patchFie({ roster: fieState.roster.map((r) => (r.id === id ? { ...r, ...patch } : r)) });
+  const resetFieToConfig = () => setFieState(buildFinishingEosFromConfig());
+
+  // ---- setters: standard work ----
+  const patchSw = (patch) => setSwState((s) => ({ ...s, ...patch }));
+  const toggleSwItem = (id) => patchSw({ items: swState.items.map((it) => (it.id === id ? { ...it, done: !it.done } : it)) });
+  const resetSwToConfig = () => setSwState(buildStandardWorkFromConfig());
+
+  // ---- config editors (no-ops while locked) ----
+  const guardedSet = (setter) => (updater) => setter((prev) => (configLocked ? prev : (typeof updater === "function" ? updater(prev) : updater)));
+  const setFinMachinesG = guardedSet(setFinMachinesConfig);
+  const setFinProductsG = guardedSet(setFinProductsConfig);
+  const setFormMachinesG = guardedSet(setFormMachinesConfig);
+  const setFormProductsG = guardedSet(setFormProductsConfig);
+  const setCategoriesG = guardedSet(setCategoriesConfig);
+  const setEmployeesG = guardedSet(setEmployeesConfig);
+  const setChecklistG = guardedSet(setChecklistConfig);
+
+  const loadStarter = (which) => {
+    if (configLocked) return;
+    if (which === "finMachines") setFinMachinesConfig(withId(STARTER_FINISHING_MACHINES));
+    if (which === "finProducts") setFinProductsConfig(withId(STARTER_FINISHING_PRODUCTS));
+    if (which === "formMachines") setFormMachinesConfig(withId(STARTER_FORMING_MACHINES));
+    if (which === "formProducts") setFormProductsConfig(withId(STARTER_FORMING_PRODUCTS));
+    if (which === "categories") setCategoriesConfig(withId(STARTER_CATEGORIES));
+    if (which === "checklist") setChecklistConfig(withId(STARTER_CHECKLIST));
+    if (which === "employees") setEmployeesConfig(withId(STARTER_EMPLOYEES.map((name) => ({ name }))));
+  };
+  const clearConfig = (which) => {
+    if (configLocked) return;
+    if (which === "finMachines") setFinMachinesConfig([]);
+    if (which === "finProducts") setFinProductsConfig([]);
+    if (which === "formMachines") setFormMachinesConfig([]);
+    if (which === "formProducts") setFormProductsConfig([]);
+    if (which === "categories") setCategoriesConfig([]);
+    if (which === "employees") setEmployeesConfig([]);
+    if (which === "checklist") setChecklistConfig([]);
+  };
+
+  const lockSetup = () => setConfigLocked(true);
+  const startNewSetup = () => {
+    if (window.confirm("Start a new setup? This unlocks Setup for editing. Existing saved shift data won't be deleted, but future dates will build from whatever you change here.")) {
+      setConfigLocked(false);
+    }
+  };
+
+  // ---- text builders ----
+  const buildUpdateText = useCallback(() => {
+    if (!forming || !finishing) return "";
+    const out = [];
+    out.push(`${timeLabel || "[time]"} Forming`);
+    out.push(`Shift Production: ${forming.shiftProduction ? kfmt(forming.shiftProduction) : ""}`);
+    out.push(`EE-${forming.ee || ""}`);
+    out.push(`${forming.buggies || ""} buggies`);
+    out.push(`L-${forming.lanes || ""}`);
+    forming.categories.forEach((c) => { if (!c.label) return; out.push(c.header || !c.qty ? `${c.label}:` : `${c.label}: ${kfmt(c.qty)}`); });
+    out.push("Issues:");
+    (forming.issues || "").split("\n").filter(Boolean).forEach((line) => out.push(line));
+    out.push("");
+    out.push(`${timeLabel || "[time]"} Finishing`);
+    out.push(`Shift production: ${finishing.shiftProduction ? kfmt(finishing.shiftProduction) : ""}`);
+    out.push(`Gluers: ${finishing.gluers || ""}`);
+    out.push("");
+    finishing.machines.forEach((m) => {
+      out.push(`${m.machine}: ${m.product}`);
+      out.push(`Speed Goal: ${m.speedGoal || ""}`);
+      out.push(`Speed: ${m.speedActual || "unscheduled"}`);
+      out.push(`Confirmations: ${m.confirmations ? kfmt(m.confirmations) : ""}`);
+      out.push(`Issues: ${m.issues || ""}`);
+      out.push("");
+    });
+    out.push(`Forming absent: ${forming.absent || ""}`);
+    out.push(`Finishing absent: ${finishing.absent || ""}`);
+    return out.join("\n");
+  }, [forming, finishing, timeLabel]);
+
+  const pad = (str, len) => String(str ?? "").padEnd(len);
+
+  const buildLaborText = useCallback(() => {
+    if (!nRows) return "";
+    const out = [];
+    out.push(`${shift} Shift Nugget Labor Report — ${date}`);
+    out.push("");
+    out.push(`${pad("Machine", 8)}${pad("Product", 13)}${pad("Lanes", 7)}${pad("Employee", 20)}${pad("Hrs", 5)}${pad("Speed", 12)}Goal`);
+    nRows.forEach((r) => {
+      if (!r.machine && !r.employee) return;
+      const goal = formSpeedGoalFor(r.product, r.lanes);
+      out.push(`${pad(r.machine, 8)}${pad(r.product, 13)}${pad(r.lanes, 7)}${pad(r.employee, 20)}${pad(r.laborHours, 5)}${pad(r.speedActual || "—", 12)}${goal || "—"}`);
+    });
+    const totalHours = nRows.reduce((s, r) => s + (parseFloat(r.laborHours) || 0), 0);
+    const totalEE = nRows.filter((r) => r.employee.trim()).length;
+    out.push("");
+    out.push(`Total EE: ${totalEE}   Total Labor Hours: ${totalHours}`);
+    const below = nRows.filter((r) => speedStatus(formSpeedGoalFor(r.product, r.lanes), r.speedActual) === "short");
+    if (below.length) {
+      out.push(""); out.push("Below goal:");
+      below.forEach((r) => out.push(`- ${r.machine} ${r.product}: ${r.speedActual}/${formSpeedGoalFor(r.product, r.lanes)}`));
+    }
+    return out.join("\n");
+  }, [nRows, shift, date, formSpeedGoalFor]);
+
+  const buildFormingEosText = useCallback(() => {
+    if (!feState) return "";
+    const lanes = parseFloat(feState.lanesRunning);
+    const eeNeeded = Number.isFinite(lanes) ? Math.ceil(lanes / 4) : null;
+    const hrs = parseFloat(feState.shiftHours) || SHIFT_HOURS_DEFAULT;
+    const actualEE = parseFloat(feState.actualEE);
+    const mfgHrs = Number.isFinite(actualEE) ? actualEE * hrs : null;
+    const totalCartons = feState.categoryTotals.reduce((s, c) => s + (parseFloat(c.qty) || 0), 0);
+    const ncplh = mfgHrs ? totalCartons / mfgHrs : null;
+    const out = [];
+    out.push(`FORMING MAP — Stone Mountain — ${shift} Shift — ${date}`);
+    out.push("");
+    out.push(`Lanes running: ${feState.lanesRunning || "—"}  |  EE needed (1 per 4 lanes): ${eeNeeded ?? "—"}  |  Actual EE: ${feState.actualEE || "—"}`);
+    out.push(`Total MFG Hrs/Shift: ${mfgHrs ?? "—"}  |  NCPLH: ${ncplh ? Math.round(ncplh) : "—"} (goal ${ncplhGoal})`);
+    out.push("");
+    out.push(`Buggy Associate: ${feState.buggyAssociate || "—"}`);
+    out.push(`Lead(s): ${feState.leadNames || "—"}`);
+    out.push(`EE moved to another dept: ${feState.movedEmployee || "—"}`);
+    out.push(`Trainees: ${feState.trainees || "—"}`);
+    out.push("");
+    out.push("Dept Totals:");
+    feState.categoryTotals.forEach((c) => { if (!c.label) return; out.push(c.header || !c.qty ? `  ${c.label}:` : `  ${c.label}: ${c.qty}`); });
+    out.push(`  Total: ${totalCartons}`);
+    if (feState.notes) { out.push(""); out.push(`Notes: ${feState.notes}`); }
+    return out.join("\n");
+  }, [feState, shift, date, ncplhGoal]);
+
+  const buildFinishingEosText = useCallback(() => {
+    if (!fieState) return "";
+    const total24 = fieState.deptTotals.reduce((s, d) => s + (parseFloat(d.total24hr) || 0), 0);
+    const totalNeeded = fieState.roster.reduce((s, r) => s + (r.manned ? (parseFloat(r.employees) || 0) : 0), 0);
+    const totalEEs = (parseFloat(fieState.actualFullTime) || 0) + (parseFloat(fieState.cws) || 0);
+    const out = [];
+    out.push(`FINISHING EoS — Stone Mountain — ${shift} Shift — ${date}`);
+    out.push("");
+    out.push("Dept Totals (24hr):");
+    fieState.deptTotals.forEach((d) => out.push(`  ${d.machine} ${d.product}: ${d.total24hr || 0}`));
+    out.push(`  Total: ${total24}`);
+    out.push("");
+    out.push("Roster:");
+    fieState.roster.forEach((r) => { if (r.manned || r.employees) out.push(`  ${r.station} — ${r.item || "—"} — ${r.employees || 0} EE`); });
+    out.push("");
+    out.push(`Total needed: ${totalNeeded}  |  Actual full time: ${fieState.actualFullTime || 0}  |  CW's: ${fieState.cws || 0}  |  Total EE's: ${totalEEs}`);
+    if (fieState.notes) { out.push(""); out.push(`Notes: ${fieState.notes}`); }
+    return out.join("\n");
+  }, [fieState, shift, date]);
+
+  const copyText = async () => { try { await navigator.clipboard.writeText(buildUpdateText()); setCopied(true); setTimeout(() => setCopied(false), 1600); } catch {} };
+  const copyLaborText = async () => { try { await navigator.clipboard.writeText(buildLaborText()); setCopiedLabor(true); setTimeout(() => setCopiedLabor(false), 1600); } catch {} };
+  const [copiedFe, setCopiedFe] = useState(false);
+  const [copiedFie, setCopiedFie] = useState(false);
+  const copyFeText = async () => { try { await navigator.clipboard.writeText(buildFormingEosText()); setCopiedFe(true); setTimeout(() => setCopiedFe(false), 1600); } catch {} };
+  const copyFieText = async () => { try { await navigator.clipboard.writeText(buildFinishingEosText()); setCopiedFie(true); setTimeout(() => setCopiedFie(false), 1600); } catch {} };
+
+  const totals = useMemo(() => {
+    const cartons = parseFloat(labor.cartons);
+    const hours = parseFloat(labor.hours);
+    const ncplh = Number.isFinite(cartons) && Number.isFinite(hours) && hours > 0 ? cartons / hours : null;
+    return { ncplh };
+  }, [labor]);
+
+  const shortMachines = finishing ? finishing.machines.filter((m) => speedStatus(m.speedGoal, m.speedActual) === "short") : [];
+  const watchMachines = finishing ? finishing.machines.filter((m) => speedStatus(m.speedGoal, m.speedActual) === "watch") : [];
+  const nuggetShort = nRows ? nRows.filter((r) => speedStatus(formSpeedGoalFor(r.product, r.lanes), r.speedActual) === "short").length : 0;
+  const nuggetWatch = nRows ? nRows.filter((r) => speedStatus(formSpeedGoalFor(r.product, r.lanes), r.speedActual) === "watch").length : 0;
+  const nuggetAssigned = nRows ? nRows.filter((r) => r.employee.trim()).length : 0;
+
+  const configEmpty = configLoaded && finMachinesConfig.length === 0 && formMachinesConfig.length === 0 && finProductsConfig.length === 0 && formProductsConfig.length === 0;
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#14161A", color: "#EDEEEF", fontFamily: "'Inter', system-ui, sans-serif", paddingBottom: 48 }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');`}</style>
+
+      <div style={{ background: "#1A1D22", borderBottom: "3px solid #F2A93B" }}>
+        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "18px 20px 14px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Factory size={22} color="#F2A93B" />
+            <h1 style={{ fontFamily: "'Oswald', sans-serif", fontWeight: 600, fontSize: 22, letterSpacing: 0.5, margin: 0, textTransform: "uppercase" }}>Shift Companion</h1>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "#6D7380", fontFamily: "'IBM Plex Mono', monospace" }}>
+              {{ setup: configSaveState, update: saveState, "labor-report": nSave, "forming-eos": feSave, "finishing-eos": fieSave, "standard-work": swSave, labor: "idle" }[tab] === "saving" ? "saving…"
+                : { setup: configSaveState, update: saveState, "labor-report": nSave, "forming-eos": feSave, "finishing-eos": fieSave, "standard-work": swSave, labor: "idle" }[tab] === "saved" ? "saved" : ""}
+            </span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginTop: 14 }}>
+            <Field label="Date"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={selectStyle} /></Field>
+            <Field label="Plant"><input value={dept} onChange={(e) => setDept(e.target.value)} style={selectStyle} /></Field>
+            <Field label="Shift">
+              <select value={shift} onChange={(e) => setShift(e.target.value)} style={selectStyle}>
+                {SHIFTS.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </Field>
+            <Field label="Update time label"><input placeholder="e.g. 7pm" value={timeLabel} onChange={(e) => setTimeLabel(e.target.value)} style={selectStyle} /></Field>
+          </div>
+        </div>
+
+        <div style={{ maxWidth: 1080, margin: "0 auto", display: "flex", gap: 2, padding: "0 20px", flexWrap: "wrap" }}>
+          {[
+            { id: "setup", label: "Setup", icon: Settings },
+            { id: "update", label: "2hr Update", icon: Gauge },
+            { id: "labor-report", label: "Nugget Labor", icon: ClipboardList },
+            { id: "forming-eos", label: "Forming EoS", icon: Factory },
+            { id: "finishing-eos", label: "Finishing EoS", icon: Factory },
+            { id: "standard-work", label: "Standard Work", icon: ListChecks },
+            { id: "labor", label: "NCPLH", icon: Users },
+          ].map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "10px 12px",
+                background: active ? "#14161A" : "transparent", color: active ? "#F2A93B" : "#8A909B",
+                border: "none", borderBottom: active ? "2px solid #F2A93B" : "2px solid transparent",
+                fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: 0.3, textTransform: "uppercase", cursor: "pointer",
+              }}>
+                <Icon size={13} /> {t.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 1080, margin: "0 auto", padding: "20px" }}>
+
+        {tab === "setup" && (
+          <div>
+            {configLocked ? (
+              <div style={{ background: "#2A2312", border: "1px solid #5A4A1F", borderRadius: 6, padding: 12, marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 12.5, color: "#F2A93B", flex: 1 }}>🔒 Setup is locked — this configuration won't change until you start a new setup.</span>
+                <button onClick={startNewSetup} style={{ ...ghostBtnStyle, marginTop: 0, borderColor: "#F2A93B", color: "#F2A93B" }}>Start New Setup</button>
+              </div>
+            ) : (
+              <div style={{ background: "#20232A", border: "1px solid #3A3F47", borderRadius: 6, padding: 12, marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 12.5, color: "#B7BCC4", flex: 1 }}>
+                  {configEmpty ? "Nothing configured yet. Build your own lists below, or load starter sets and edit from there." : "Setup is unlocked and editable. Lock it once it's right so it can't change mid-shift by accident."}
+                </span>
+                <button onClick={lockSetup} style={{ ...ghostBtnStyle, marginTop: 0, borderColor: "#4FB477", color: "#4FB477" }}>Lock Setup</button>
+              </div>
+            )}
+
+            <SectionHead title="Forming Machines" note="Machine # and lanes are fixed. Default product is what a fresh shift starts on." />
+            <Panel>
+              <MachineTable headers={["Machine", "Lanes", "Default Product"]} rows={formMachinesConfig}
+                onChange={(id, patch) => setFormMachinesG((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))}
+                onRemove={(id) => setFormMachinesG((rows) => rows.filter((r) => r.id !== id))}
+                disabled={configLocked} productOptions={formProductNames} hasLanes />
+              {!configLocked && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={() => setFormMachinesG((rows) => [...rows, { id: crypto.randomUUID(), machine: "", lanes: "", defaultProduct: "" }])} style={addBtnStyle}><Plus size={13} /> Add machine</button>
+                  <button onClick={() => loadStarter("formMachines")} style={ghostBtnStyle}><Download size={13} /> Load starter set</button>
+                  {formMachinesConfig.length > 0 && <button onClick={() => clearConfig("formMachines")} style={ghostBtnStyle}>Clear all</button>}
+                </div>
+              )}
+            </Panel>
+
+            <SectionHead title="Forming Products (Speed Rate)" note="Standard Speed = Rate per Lane × machine's lanes." style={{ marginTop: 20 }} />
+            <Panel>
+              <ConfigTable headers={["Product", "Rate per Lane"]} rows={formProductsConfig} fields={["product", "ratePerLane"]}
+                onChange={(id, patch) => setFormProductsG((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))}
+                onRemove={(id) => setFormProductsG((rows) => rows.filter((r) => r.id !== id))} disabled={configLocked} />
+              {!configLocked && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={() => setFormProductsG((rows) => [...rows, { id: crypto.randomUUID(), product: "", ratePerLane: "" }])} style={addBtnStyle}><Plus size={13} /> Add product</button>
+                  <button onClick={() => loadStarter("formProducts")} style={ghostBtnStyle}><Download size={13} /> Load starter set</button>
+                  {formProductsConfig.length > 0 && <button onClick={() => clearConfig("formProducts")} style={ghostBtnStyle}>Clear all</button>}
+                </div>
+              )}
+            </Panel>
+
+            <SectionHead title="Finishing Machines" note="Default product a fresh shift starts on — changeable per shift via dropdown." style={{ marginTop: 20 }} />
+            <Panel>
+              <MachineTable headers={["Machine", "Default Product"]} rows={finMachinesConfig}
+                onChange={(id, patch) => setFinMachinesG((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))}
+                onRemove={(id) => setFinMachinesG((rows) => rows.filter((r) => r.id !== id))}
+                disabled={configLocked} productOptions={finProductNames} />
+              {!configLocked && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={() => setFinMachinesG((rows) => [...rows, { id: crypto.randomUUID(), machine: "", defaultProduct: "" }])} style={addBtnStyle}><Plus size={13} /> Add machine</button>
+                  <button onClick={() => loadStarter("finMachines")} style={ghostBtnStyle}><Download size={13} /> Load starter set</button>
+                  {finMachinesConfig.length > 0 && <button onClick={() => clearConfig("finMachines")} style={ghostBtnStyle}>Clear all</button>}
+                </div>
+              )}
+            </Panel>
+
+            <SectionHead title="Finishing Products (Speed Goal)" note="Flat hourly speed goal per product." style={{ marginTop: 20 }} />
+            <Panel>
+              <ConfigTable headers={["Product", "Speed Goal"]} rows={finProductsConfig} fields={["product", "speedGoal"]}
+                onChange={(id, patch) => setFinProductsG((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))}
+                onRemove={(id) => setFinProductsG((rows) => rows.filter((r) => r.id !== id))} disabled={configLocked} />
+              {!configLocked && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={() => setFinProductsG((rows) => [...rows, { id: crypto.randomUUID(), product: "", speedGoal: "" }])} style={addBtnStyle}><Plus size={13} /> Add product</button>
+                  <button onClick={() => loadStarter("finProducts")} style={ghostBtnStyle}><Download size={13} /> Load starter set</button>
+                  {finProductsConfig.length > 0 && <button onClick={() => clearConfig("finProducts")} style={ghostBtnStyle}>Clear all</button>}
+                </div>
+              )}
+            </Panel>
+
+            <SectionHead title="Forming Categories" note="Used by the 2hr Update and Forming EoS tabs." style={{ marginTop: 20 }} />
+            <Panel>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {categoriesConfig.map((c) => (
+                  <div key={c.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input disabled={configLocked} value={c.label} onChange={(e) => setCategoriesG((rows) => rows.map((r) => (r.id === c.id ? { ...r, label: e.target.value } : r)))} style={{ ...inputStyle, flex: 1, opacity: configLocked ? 0.6 : 1 }} placeholder="Category label" />
+                    <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "#6D7380" }}>
+                      <input disabled={configLocked} type="checkbox" checked={!!c.header} onChange={(e) => setCategoriesG((rows) => rows.map((r) => (r.id === c.id ? { ...r, header: e.target.checked } : r)))} /> header only
+                    </label>
+                    {!configLocked && <button onClick={() => setCategoriesG((rows) => rows.filter((r) => r.id !== c.id))} style={iconBtnStyle}><Trash2 size={12} /></button>}
+                  </div>
+                ))}
+              </div>
+              {!configLocked && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={() => setCategoriesG((rows) => [...rows, { id: crypto.randomUUID(), label: "", header: false }])} style={addBtnStyle}><Plus size={13} /> Add category</button>
+                  <button onClick={() => loadStarter("categories")} style={ghostBtnStyle}><Download size={13} /> Load starter set</button>
+                  {categoriesConfig.length > 0 && <button onClick={() => clearConfig("categories")} style={ghostBtnStyle}>Clear all</button>}
+                </div>
+              )}
+            </Panel>
+
+            <SectionHead title="Employees" note="Forming employee names — used as the dropdown on the Nugget Labor tab." style={{ marginTop: 20 }} />
+            <Panel>
+              {employeesConfig.length === 0 && <div style={{ fontSize: 12, color: "#6D7380", marginBottom: 8 }}>No names loaded yet — load the roster below, or add names manually.</div>}
+              <ConfigTable headers={["Name"]} rows={employeesConfig} fields={["name"]}
+                onChange={(id, patch) => setEmployeesG((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))}
+                onRemove={(id) => setEmployeesG((rows) => rows.filter((r) => r.id !== id))} disabled={configLocked} />
+              {!configLocked && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={() => setEmployeesG((rows) => [...rows, { id: crypto.randomUUID(), name: "" }])} style={addBtnStyle}><Plus size={13} /> Add employee</button>
+                  <button onClick={() => loadStarter("employees")} style={ghostBtnStyle}><Download size={13} /> Load Forming roster ({STARTER_EMPLOYEES.length})</button>
+                  {employeesConfig.length > 0 && <button onClick={() => clearConfig("employees")} style={ghostBtnStyle}>Clear all</button>}
+                </div>
+              )}
+            </Panel>
+
+            <SectionHead title="Shift Checklist" note="From the Supervisor Standard Work sheet — used by the Standard Work tab." style={{ marginTop: 20 }} />
+            <Panel>
+              <ConfigTable headers={["Section", "Task"]} rows={checklistConfig} fields={["section", "label"]}
+                onChange={(id, patch) => setChecklistG((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))}
+                onRemove={(id) => setChecklistG((rows) => rows.filter((r) => r.id !== id))} disabled={configLocked} />
+              {!configLocked && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={() => setChecklistG((rows) => [...rows, { id: crypto.randomUUID(), section: "During Shift", label: "" }])} style={addBtnStyle}><Plus size={13} /> Add task</button>
+                  <button onClick={() => loadStarter("checklist")} style={ghostBtnStyle}><Download size={13} /> Load starter set</button>
+                  {checklistConfig.length > 0 && <button onClick={() => clearConfig("checklist")} style={ghostBtnStyle}>Clear all</button>}
+                </div>
+              )}
+            </Panel>
+
+            <SectionHead title="NCPLH Goal" note="Used by the NCPLH and Forming EoS tabs." style={{ marginTop: 20 }} />
+            <Panel>
+              <input disabled={configLocked} type="number" value={ncplhGoal} onChange={(e) => setNcplhGoal(e.target.value)} style={{ ...inputStyle, width: 140, opacity: configLocked ? 0.6 : 1 }} />
+            </Panel>
+          </div>
+        )}
+
+        {tab === "update" && (!forming || !finishing ? (
+          <EmptyNotice text="Loading…" />
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+            <div>
+              <SectionHead title="Forming" note="Pull totals from SAP EoS confirmations." />
+              <Panel>
+                <Row3>
+                  <MiniField label="Shift Production"><input type="number" value={forming.shiftProduction} onChange={(e) => patchForming({ shiftProduction: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="EE"><input type="number" value={forming.ee} onChange={(e) => patchForming({ ee: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="Buggies"><input placeholder="e.g. One" value={forming.buggies} onChange={(e) => patchForming({ buggies: e.target.value })} style={inputStyle} /></MiniField>
+                </Row3>
+                <div style={{ marginTop: 8 }}>
+                  <MiniField label="Lanes (L-)"><input type="number" value={forming.lanes} onChange={(e) => patchForming({ lanes: e.target.value })} style={{ ...inputStyle, width: 100 }} /></MiniField>
+                </div>
+                {forming.categories.length === 0 ? (
+                  <EmptyNotice text="No categories configured yet — add them in Setup." small />
+                ) : (
+                  <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                    {forming.categories.map((c) => (
+                      <div key={c.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <span style={{ flex: "1 1 130px", fontSize: 12.5, fontWeight: c.header ? 600 : 400, color: "#B7BCC4" }}>{c.label}</span>
+                        {!c.header && <input type="number" value={c.qty} onChange={(e) => updateCategory(c.id, { qty: e.target.value })} style={{ ...inputStyle, flex: "0 0 110px" }} placeholder="qty" />}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ marginTop: 12 }}>
+                  <MiniField label="Issues (one per line)"><textarea value={forming.issues} onChange={(e) => patchForming({ issues: e.target.value })} style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} /></MiniField>
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <MiniField label="Forming absent"><input value={forming.absent} onChange={(e) => patchForming({ absent: e.target.value })} style={inputStyle} /></MiniField>
+                </div>
+              </Panel>
+
+              <SectionHead title="Finishing" note="Pick the current product per machine — speed goal auto-fills from Setup." style={{ marginTop: 20 }} />
+              <Panel>
+                <Row3>
+                  <MiniField label="Shift Production"><input type="number" value={finishing.shiftProduction} onChange={(e) => patchFinishing({ shiftProduction: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="Gluers"><input type="number" value={finishing.gluers} onChange={(e) => patchFinishing({ gluers: e.target.value })} style={inputStyle} /></MiniField>
+                  <div />
+                </Row3>
+                {finishing.machines.length === 0 ? (
+                  <EmptyNotice text="No finishing machines configured yet — add them in Setup." small />
+                ) : (
+                  <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                    {finishing.machines.map((m) => {
+                      const stat = speedStatus(m.speedGoal, m.speedActual);
+                      return (
+                        <div key={m.id} style={{ background: "#1A1D22", border: "1px solid #2C3038", borderRadius: 5, padding: 8 }}>
+                          <div style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+                            <span style={{ flex: "0 0 60px", fontWeight: 600, fontSize: 13 }}>{m.machine}</span>
+                            <Select value={m.product} onChange={(v) => onFinProductChange(m.id, v)} options={finProductNames} style={{ ...inputStyle, flex: "1 1 130px" }} />
+                            <Dot status={stat} />
+                            <button onClick={() => removeFinRow(m.id)} style={iconBtnStyle}><Trash2 size={12} /></button>
+                          </div>
+                          <Row4>
+                            <MiniField label="Speed Goal"><input value={m.speedGoal} onChange={(e) => updateFinMachine(m.id, { speedGoal: e.target.value })} style={inputStyle} /></MiniField>
+                            <MiniField label="Speed"><input value={m.speedActual} onChange={(e) => updateFinMachine(m.id, { speedActual: e.target.value })} style={inputStyle} placeholder="or blank = unscheduled" /></MiniField>
+                            <MiniField label="Confirmations"><input type="number" value={m.confirmations} onChange={(e) => updateFinMachine(m.id, { confirmations: e.target.value })} style={inputStyle} /></MiniField>
+                            <MiniField label="Issues"><input value={m.issues} onChange={(e) => updateFinMachine(m.id, { issues: e.target.value })} style={inputStyle} /></MiniField>
+                          </Row4>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <button onClick={addFinRow} style={addBtnStyle}><Plus size={13} /> Add machine (ad hoc)</button>
+                <div style={{ marginTop: 8 }}>
+                  <MiniField label="Finishing absent"><input value={finishing.absent} onChange={(e) => patchFinishing({ absent: e.target.value })} style={inputStyle} /></MiniField>
+                </div>
+              </Panel>
+            </div>
+
+            <div>
+              <SectionHead title="Text Preview" note={`${shortMachines.length} short · ${watchMachines.length} watch`} />
+              <div style={{ background: "#1E2126", border: "1px solid #2C3038", borderRadius: 6, overflow: "hidden", position: "sticky", top: 12 }}>
+                <pre style={{ margin: 0, padding: 16, fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, lineHeight: 1.6, color: "#D7DAE0", whiteSpace: "pre-wrap", maxHeight: 640, overflowY: "auto" }}>{buildUpdateText()}</pre>
+                <button onClick={copyText} style={copyBtnStyle(copied)}>{copied ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy to clipboard</>}</button>
+              </div>
+              <button onClick={resetUpdateToConfig} style={resetBtnStyle}><RotateCcw size={13} /> Reset this update to Setup defaults</button>
+            </div>
+          </div>
+        ))}
+
+        {tab === "labor-report" && (!nRows ? (
+          <EmptyNotice text="Loading…" />
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
+            <div>
+              <SectionHead title="Nugget Labor Report" note="Machine & lanes are fixed; pick product and assign an employee per row." />
+              <div style={{ display: "flex", gap: 10, marginBottom: 12, alignItems: "center" }}>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 14, alignItems: "center", fontSize: 11, color: "#8A909B" }}>
+                  <span>{nuggetAssigned}/{nRows.length} assigned</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Dot status="short" /> {nuggetShort}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Dot status="watch" /> {nuggetWatch}</span>
+                </div>
+              </div>
+              {nRows.length === 0 ? (
+                <EmptyNotice text="No forming machines configured yet — add them in Setup." />
+              ) : (
+                <Panel>
+                  <div style={{ display: "grid", gridTemplateColumns: "58px 40px 108px 1fr 46px 58px 56px 26px", gap: 6, fontSize: 10, color: "#6D7380", textTransform: "uppercase", marginBottom: 6, padding: "0 2px" }}>
+                    <span>Machine</span><span>Lns</span><span>Product</span><span>Employee</span><span>Hrs</span><span>Speed</span><span>Goal</span><span />
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    {nRows.map((r) => {
+                      const goal = formSpeedGoalFor(r.product, r.lanes);
+                      const stat = speedStatus(goal, r.speedActual);
+                      return (
+                        <div key={r.id} style={{ display: "grid", gridTemplateColumns: "58px 40px 108px 1fr 46px 58px 56px 26px", gap: 6, alignItems: "center" }}>
+                          <span style={{ fontWeight: 600, fontSize: 12.5 }}>{r.machine}</span>
+                          <span style={{ fontSize: 12, color: "#B7BCC4" }}>{r.lanes}</span>
+                          <Select value={r.product} onChange={(v) => updateNuggetRow(r.id, { product: v })} options={formProductNames} style={inputStyle} />
+                          <Select value={r.employee} onChange={(v) => updateNuggetRow(r.id, { employee: v })} options={employeeNames} placeholder="— name —" style={inputStyle} />
+                          <input value={r.laborHours} onChange={(e) => updateNuggetRow(r.id, { laborHours: e.target.value })} style={inputStyle} />
+                          <input value={r.speedActual} onChange={(e) => updateNuggetRow(r.id, { speedActual: e.target.value })} style={inputStyle} />
+                          <span style={{ fontSize: 12, color: "#8A909B" }}>{goal || "—"}</span>
+                          <div style={{ display: "flex", justifyContent: "center" }}><Dot status={stat} /></div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Panel>
+              )}
+              <button onClick={addNuggetRow} style={addBtnStyle}><Plus size={13} /> Add row (ad hoc)</button>
+              <button onClick={resetNuggetToConfig} style={resetBtnStyle}><RotateCcw size={13} /> Reset this report to Setup defaults</button>
+            </div>
+            <div>
+              <SectionHead title="Report Preview" note={`${shift} shift`} />
+              <div style={{ background: "#1E2126", border: "1px solid #2C3038", borderRadius: 6, overflow: "hidden", position: "sticky", top: 12 }}>
+                <pre style={{ margin: 0, padding: 16, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, lineHeight: 1.6, color: "#D7DAE0", whiteSpace: "pre", overflowX: "auto", maxHeight: 640, overflowY: "auto" }}>{buildLaborText()}</pre>
+                <button onClick={copyLaborText} style={copyBtnStyle(copiedLabor)}>{copiedLabor ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy to clipboard</>}</button>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {tab === "forming-eos" && (!feState ? (
+          <EmptyNotice text="Loading…" />
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 20 }}>
+            <div>
+              <SectionHead title="Forming Map — Headcount vs. Lanes" note="Mirrors the plant's Forming Map / EoS sheet." />
+              <Panel>
+                <Row3>
+                  <MiniField label="Lanes Running"><input type="number" value={feState.lanesRunning} onChange={(e) => patchFe({ lanesRunning: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="Actual EE's"><input type="number" value={feState.actualEE} onChange={(e) => patchFe({ actualEE: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="Shift Hours"><input type="number" value={feState.shiftHours} onChange={(e) => patchFe({ shiftHours: e.target.value })} style={inputStyle} /></MiniField>
+                </Row3>
+                {(() => {
+                  const lanes = parseFloat(feState.lanesRunning);
+                  const eeNeeded = Number.isFinite(lanes) ? Math.ceil(lanes / 4) : null;
+                  const hrs = parseFloat(feState.shiftHours) || SHIFT_HOURS_DEFAULT;
+                  const actualEE = parseFloat(feState.actualEE);
+                  const mfgHrs = Number.isFinite(actualEE) ? actualEE * hrs : null;
+                  return (
+                    <div style={{ display: "flex", gap: 20, marginTop: 12, padding: 10, background: "#1A1D22", borderRadius: 5 }}>
+                      <RollupNum label="EE Needed (1/4 lanes)" value={eeNeeded ?? "—"} />
+                      <RollupNum label="Total MFG Hrs/Shift" value={mfgHrs ?? "—"} />
+                      <RollupNum label="EE Variance" value={eeNeeded != null && Number.isFinite(actualEE) ? (actualEE - eeNeeded >= 0 ? "+" : "") + (actualEE - eeNeeded) : "—"} tone={eeNeeded != null && Number.isFinite(actualEE) ? (actualEE >= eeNeeded ? "good" : "bad") : undefined} />
+                    </div>
+                  );
+                })()}
+              </Panel>
+
+              <SectionHead title="Roster" note="Names, leads, and trainees for this shift." style={{ marginTop: 20 }} />
+              <Panel>
+                <Row4>
+                  <MiniField label="Buggy Associate"><input value={feState.buggyAssociate} onChange={(e) => patchFe({ buggyAssociate: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="Lead(s)"><input value={feState.leadNames} onChange={(e) => patchFe({ leadNames: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="Moved to Another Dept"><input value={feState.movedEmployee} onChange={(e) => patchFe({ movedEmployee: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="Trainees"><input value={feState.trainees} onChange={(e) => patchFe({ trainees: e.target.value })} style={inputStyle} /></MiniField>
+                </Row4>
+              </Panel>
+
+              <SectionHead title="Dept Totals" note="By product category — same list as the 2hr Update." style={{ marginTop: 20 }} />
+              <Panel>
+                {feState.categoryTotals.length === 0 ? (
+                  <EmptyNotice text="No categories configured yet — add them in Setup." small />
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {feState.categoryTotals.map((c) => (
+                      <div key={c.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <span style={{ flex: "1 1 130px", fontSize: 12.5, fontWeight: c.header ? 600 : 400, color: "#B7BCC4" }}>{c.label}</span>
+                        {!c.header && <input type="number" value={c.qty} onChange={(e) => updateFeCategory(c.id, { qty: e.target.value })} style={{ ...inputStyle, flex: "0 0 110px" }} placeholder="qty" />}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ marginTop: 10 }}>
+                  <MiniField label="Notes"><textarea value={feState.notes} onChange={(e) => patchFe({ notes: e.target.value })} style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} /></MiniField>
+                </div>
+              </Panel>
+              <button onClick={resetFeToConfig} style={resetBtnStyle}><RotateCcw size={13} /> Reset to Setup defaults</button>
+            </div>
+
+            <div>
+              <SectionHead title="Summary Preview" note={`${shift} shift · NCPLH goal ${ncplhGoal}`} />
+              <div style={{ background: "#1E2126", border: "1px solid #2C3038", borderRadius: 6, overflow: "hidden", position: "sticky", top: 12 }}>
+                <pre style={{ margin: 0, padding: 16, fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, lineHeight: 1.6, color: "#D7DAE0", whiteSpace: "pre-wrap", maxHeight: 640, overflowY: "auto" }}>{buildFormingEosText()}</pre>
+                <button onClick={copyFeText} style={copyBtnStyle(copiedFe)}>{copiedFe ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy to clipboard</>}</button>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {tab === "finishing-eos" && (!fieState ? (
+          <EmptyNotice text="Loading…" />
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 20 }}>
+            <div>
+              <SectionHead title="Dept Totals" note="24-hour production per machine — mirrors the Finishing EoS sheet." />
+              <Panel>
+                {fieState.deptTotals.length === 0 ? (
+                  <EmptyNotice text="No finishing machines configured yet — add them in Setup." small />
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "60px 1fr 100px", gap: 6, fontSize: 10, color: "#6D7380", textTransform: "uppercase" }}>
+                      <span>Machine</span><span>Product</span><span>24hr Total</span>
+                    </div>
+                    {fieState.deptTotals.map((d) => (
+                      <div key={d.id} style={{ display: "grid", gridTemplateColumns: "60px 1fr 100px", gap: 6, alignItems: "center" }}>
+                        <span style={{ fontWeight: 600, fontSize: 12.5 }}>{d.machine}</span>
+                        <Select value={d.product} onChange={(v) => updateFieDeptTotal(d.id, { product: v })} options={finProductNames} style={inputStyle} />
+                        <input type="number" value={d.total24hr} onChange={(e) => updateFieDeptTotal(d.id, { total24hr: e.target.value })} style={inputStyle} />
+                      </div>
+                    ))}
+                    <div style={{ marginTop: 6, fontSize: 12.5, color: "#F2A93B", fontFamily: "'IBM Plex Mono', monospace" }}>
+                      Total: {fieState.deptTotals.reduce((s, d) => s + (parseFloat(d.total24hr) || 0), 0).toLocaleString()}
+                    </div>
+                  </div>
+                )}
+              </Panel>
+
+              <SectionHead title="Staffing Roster" note="Manning by station for this shift." style={{ marginTop: 20 }} />
+              <Panel>
+                {fieState.roster.length === 0 ? (
+                  <EmptyNotice text="No finishing machines configured yet — add them in Setup." small />
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 60px 70px", gap: 6, fontSize: 10, color: "#6D7380", textTransform: "uppercase" }}>
+                      <span>Station</span><span>Item</span><span>Manned</span><span># EE</span>
+                    </div>
+                    {fieState.roster.map((r) => (
+                      <div key={r.id} style={{ display: "grid", gridTemplateColumns: "100px 1fr 60px 70px", gap: 6, alignItems: "center" }}>
+                        <span style={{ fontSize: 12.5, fontWeight: r.isMachine ? 600 : 400 }}>{r.station}</span>
+                        <input value={r.item} onChange={(e) => updateFieRoster(r.id, { item: e.target.value })} style={inputStyle} placeholder="item / product" />
+                        <input type="checkbox" checked={r.manned} onChange={(e) => updateFieRoster(r.id, { manned: e.target.checked })} />
+                        <input type="number" value={r.employees} onChange={(e) => updateFieRoster(r.id, { employees: e.target.value })} style={inputStyle} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Row3 style={{ marginTop: 12 }}>
+                  <MiniField label="Actual Full Time"><input type="number" value={fieState.actualFullTime} onChange={(e) => patchFie({ actualFullTime: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="CW's"><input type="number" value={fieState.cws} onChange={(e) => patchFie({ cws: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="Total EE's"><span style={{ ...inputStyle, background: "#181B20", color: "#8A909B", display: "block" }}>{(parseFloat(fieState.actualFullTime) || 0) + (parseFloat(fieState.cws) || 0)}</span></MiniField>
+                </Row3>
+                <div style={{ marginTop: 10 }}>
+                  <MiniField label="Notes"><textarea value={fieState.notes} onChange={(e) => patchFie({ notes: e.target.value })} style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} /></MiniField>
+                </div>
+              </Panel>
+              <button onClick={resetFieToConfig} style={resetBtnStyle}><RotateCcw size={13} /> Reset to Setup defaults</button>
+            </div>
+
+            <div>
+              <SectionHead title="Summary Preview" note={`${shift} shift`} />
+              <div style={{ background: "#1E2126", border: "1px solid #2C3038", borderRadius: 6, overflow: "hidden", position: "sticky", top: 12 }}>
+                <pre style={{ margin: 0, padding: 16, fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, lineHeight: 1.6, color: "#D7DAE0", whiteSpace: "pre-wrap", maxHeight: 640, overflowY: "auto" }}>{buildFinishingEosText()}</pre>
+                <button onClick={copyFieText} style={copyBtnStyle(copiedFie)}>{copiedFie ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy to clipboard</>}</button>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {tab === "standard-work" && (!swState ? (
+          <EmptyNotice text="Loading…" />
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 20 }}>
+            <div>
+              <SectionHead title="Quick Fields" note="Start-of-shift numbers." />
+              <Panel>
+                <Row4>
+                  <MiniField label="Lanes"><input type="number" value={swState.lanes} onChange={(e) => patchSw({ lanes: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="GPI EE"><input type="number" value={swState.gpiEE} onChange={(e) => patchSw({ gpiEE: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="CW's"><input type="number" value={swState.cws} onChange={(e) => patchSw({ cws: e.target.value })} style={inputStyle} /></MiniField>
+                  <MiniField label="Absent/Late"><input value={swState.absentLate} onChange={(e) => patchSw({ absentLate: e.target.value })} style={inputStyle} /></MiniField>
+                </Row4>
+              </Panel>
+
+              {CHECKLIST_SECTIONS.map((section) => {
+                const items = swState.items.filter((it) => it.section === section);
+                if (items.length === 0) return null;
+                const doneCount = items.filter((it) => it.done).length;
+                return (
+                  <div key={section}>
+                    <SectionHead title={section} note={`${doneCount}/${items.length} done`} style={{ marginTop: 20 }} />
+                    <Panel>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {items.map((it) => (
+                          <label key={it.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: it.done ? "#6D7380" : "#EDEEEF", textDecoration: it.done ? "line-through" : "none", cursor: "pointer" }}>
+                            <input type="checkbox" checked={it.done} onChange={() => toggleSwItem(it.id)} />
+                            {it.label}
+                          </label>
+                        ))}
+                      </div>
+                    </Panel>
+                  </div>
+                );
+              })}
+
+              {swState.items.length === 0 && <EmptyNotice text="No checklist configured yet — add tasks in Setup." />}
+
+              <SectionHead title="Notes" style={{ marginTop: 20 }} />
+              <Panel>
+                <textarea value={swState.notes} onChange={(e) => patchSw({ notes: e.target.value })} style={{ ...inputStyle, minHeight: 80, resize: "vertical" }} />
+              </Panel>
+              <button onClick={resetSwToConfig} style={resetBtnStyle}><RotateCcw size={13} /> Reset checklist for this shift</button>
+            </div>
+
+            <div>
+              <SectionHead title="Speed Reference" note="From Forming Products — Rate per Lane × lanes." />
+              <Panel>
+                {formProductsConfig.length === 0 ? (
+                  <EmptyNotice text="No forming products configured yet." small />
+                ) : (
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#D7DAE0" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 60px", gap: 6, color: "#6D7380", fontSize: 10, textTransform: "uppercase", marginBottom: 6 }}>
+                      <span>Product</span><span>2 Lns</span><span>4 Lns</span><span>6 Lns</span>
+                    </div>
+                    {formProductsConfig.map((p) => {
+                      const rate = parseFloat(p.ratePerLane) || 0;
+                      return (
+                        <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 60px", gap: 6, padding: "2px 0" }}>
+                          <span>{p.product}</span><span>{rate * 2 || "—"}</span><span>{rate * 4 || "—"}</span><span>{rate * 6 || "—"}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Panel>
+            </div>
+          </div>
+        ))}
+
+        {tab === "labor" && (
+          <div>
+            <SectionHead title="Labor & NCPLH" note="Net cartons per labor hour vs. your configured goal." />
+            <Panel>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <MiniField label="Total Cartons"><input type="number" value={labor.cartons} onChange={(e) => setLabor((l) => ({ ...l, cartons: e.target.value }))} style={{ ...inputStyle, width: 180 }} /></MiniField>
+                <MiniField label="Total Labor Hours"><input type="number" value={labor.hours} onChange={(e) => setLabor((l) => ({ ...l, hours: e.target.value }))} style={{ ...inputStyle, width: 180 }} /></MiniField>
+                <div style={{ marginLeft: "auto", textAlign: "right" }}>
+                  <div style={{ fontSize: 11, color: "#8A909B", textTransform: "uppercase", letterSpacing: 0.5 }}>NCPLH</div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 30, fontWeight: 500, color: totals.ncplh ? (totals.ncplh >= ncplhGoal ? "#4FB477" : "#E2544B") : "#EDEEEF" }}>
+                    {totals.ncplh ? Math.round(totals.ncplh).toLocaleString() : "—"}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#6D7380" }}>goal {Number(ncplhGoal).toLocaleString()}</div>
+                </div>
+              </div>
+            </Panel>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- small components ----------
+function ConfigTable({ headers, rows, fields, onChange, onRemove, disabled }) {
+  const cols = `repeat(${fields.length}, 1fr) 26px`;
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: cols, gap: 6, fontSize: 10, color: "#6D7380", textTransform: "uppercase", marginBottom: 6 }}>
+        {headers.map((h) => <span key={h}>{h}</span>)}<span />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {rows.map((r) => (
+          <div key={r.id} style={{ display: "grid", gridTemplateColumns: cols, gap: 6, alignItems: "center" }}>
+            {fields.map((f) => (
+              <input key={f} disabled={disabled} value={r[f] ?? ""} onChange={(e) => onChange(r.id, { [f]: e.target.value })} style={{ ...inputStyle, opacity: disabled ? 0.6 : 1 }} />
+            ))}
+            {!disabled && <button onClick={() => onRemove(r.id)} style={{ ...iconBtnStyle, padding: 2, border: "none" }}><Trash2 size={12} /></button>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+function MachineTable({ headers, rows, onChange, onRemove, disabled, productOptions, hasLanes }) {
+  const cols = hasLanes ? "70px 60px 1fr 26px" : "90px 1fr 26px";
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: cols, gap: 6, fontSize: 10, color: "#6D7380", textTransform: "uppercase", marginBottom: 6 }}>
+        {headers.map((h) => <span key={h}>{h}</span>)}<span />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {rows.map((r) => (
+          <div key={r.id} style={{ display: "grid", gridTemplateColumns: cols, gap: 6, alignItems: "center" }}>
+            <input disabled={disabled} value={r.machine} onChange={(e) => onChange(r.id, { machine: e.target.value })} style={{ ...inputStyle, opacity: disabled ? 0.6 : 1, fontWeight: 600 }} />
+            {hasLanes && <input disabled={disabled} value={r.lanes} onChange={(e) => onChange(r.id, { lanes: e.target.value })} style={{ ...inputStyle, opacity: disabled ? 0.6 : 1 }} />}
+            <Select value={r.defaultProduct} onChange={(v) => onChange(r.id, { defaultProduct: v })} options={productOptions} disabled={disabled} style={{ ...inputStyle, opacity: disabled ? 0.6 : 1 }} />
+            {!disabled && <button onClick={() => onRemove(r.id)} style={{ ...iconBtnStyle, padding: 2, border: "none" }}><Trash2 size={12} /></button>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+function Field({ label, children }) {
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: "#6D7380", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4, fontFamily: "'Oswald', sans-serif" }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+function MiniField({ label, children }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+      <span style={{ fontSize: 10, color: "#6D7380", textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</span>
+      {children}
+    </div>
+  );
+}
+function SectionHead({ title, note, style }) {
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10, ...style }}>
+      <h2 style={{ fontFamily: "'Oswald', sans-serif", fontSize: 15, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4, margin: 0, color: "#F2A93B" }}>{title}</h2>
+      <ChevronRight size={12} color="#4A5058" />
+      <span style={{ fontSize: 11.5, color: "#6D7380" }}>{note}</span>
+    </div>
+  );
+}
+function Panel({ children }) {
+  return <div style={{ background: "#1E2126", border: "1px solid #2C3038", borderRadius: 6, padding: 14 }}>{children}</div>;
+}
+function Row3({ children, style }) { return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, ...style }}>{children}</div>; }
+function Row4({ children, style }) { return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, ...style }}>{children}</div>; }
+function RollupNum({ label, value, tone }) {
+  const color = tone === "bad" ? "#E2544B" : tone === "good" ? "#4FB477" : "#EDEEEF";
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: "#6D7380", textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 20, color, fontWeight: 500 }}>{value}</div>
+    </div>
+  );
+}
+function EmptyNotice({ text, small }) {
+  return <div style={{ color: "#6D7380", fontSize: small ? 12 : 13, padding: small ? "8px 2px" : "24px 0", textAlign: small ? "left" : "center" }}>{text}</div>;
+}
+function copyBtnStyle(active) {
+  return {
+    width: "100%", padding: "11px 0", background: active ? "#1F3A2A" : "#262A31", border: "none",
+    borderTop: "1px solid #2C3038", color: active ? "#4FB477" : "#F2A93B",
+    fontFamily: "'Oswald', sans-serif", fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5,
+    display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer",
+  };
+}
+
+// ---------- shared styles ----------
+const selectStyle = { width: "100%", background: "#20232A", border: "1px solid #33383F", borderRadius: 4, color: "#EDEEEF", padding: "7px 8px", fontSize: 13, fontFamily: "'Inter', sans-serif" };
+const inputStyle = { background: "#20232A", border: "1px solid #33383F", borderRadius: 4, color: "#EDEEEF", padding: "6px 8px", fontSize: 12.5, fontFamily: "'Inter', sans-serif", width: "100%" };
+const iconBtnStyle = { background: "transparent", border: "1px solid #33383F", borderRadius: 4, color: "#6D7380", padding: "5px 7px", cursor: "pointer", flexShrink: 0 };
+const addBtnStyle = { marginTop: 2, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px dashed #3A3F47", borderRadius: 6, color: "#8A909B", padding: "7px 12px", fontSize: 12, cursor: "pointer", fontFamily: "'Inter', sans-serif" };
+const ghostBtnStyle = { marginTop: 2, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #33383F", borderRadius: 6, color: "#8A909B", padding: "7px 12px", fontSize: 12, cursor: "pointer", fontFamily: "'Inter', sans-serif" };
+const resetBtnStyle = { marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: "#4A5058", fontSize: 11.5, cursor: "pointer", padding: 0 };
